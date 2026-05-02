@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>StackNine — Login</title>
+  <style>
+    body { font-family: sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; }
+    input { display: block; width: 100%; padding: 10px; margin: 10px 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+    button { width: 100%; padding: 10px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+    .error { color: red; font-size: 14px; }
+    h1 { color: #1e3a8a; }
+  </style>
+</head>
+<body>
+  <h1>StackNine Invoice Processor</h1>
+  <form method="post" action="/login">
+    <input type="email" name="email" placeholder="Email address" required>
+    <input type="password" name="password" placeholder="Password (anything works)">
+    <button type="submit">Login</button>
+  </form>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+</body>
+</html>

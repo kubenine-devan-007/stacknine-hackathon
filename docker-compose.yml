@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: stacknine
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  extractor:
+    build: ./extractor
+    ports:
+      - "8001:8001"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: stacknine
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  parser:
+    build: ./parser
+    ports:
+      - "8002:8002"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: stacknine
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  main-backend:
+    build: ./main-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: stacknine
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      EXTRACTOR_URL: http://extractor:8001
+      PARSER_URL: http://parser:8002
+      UPLOAD_DIR: /app/uploads
+      ENV: local
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      extractor:
+        condition: service_started
+      parser:
+        condition: service_started
+
+volumes:
+  pgdata:
+  uploads:

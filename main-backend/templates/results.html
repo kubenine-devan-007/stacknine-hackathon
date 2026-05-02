@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>StackNine — Results</title>
+  {% if job and job.status not in ['done', 'error'] %}
+  <meta http-equiv="refresh" content="3">
+  {% endif %}
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 60px auto; padding: 0 20px; }
+    .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 30px; margin: 20px 0; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+    td { padding: 8px; border-bottom: 1px solid #e5e7eb; }
+    td:last-child { text-align: right; }
+    .total-row td { font-weight: bold; font-size: 18px; border-top: 2px solid #374151; border-bottom: none; }
+    .status { color: #6b7280; }
+    a { color: #2563eb; }
+    h1 { color: #1e3a8a; }
+    .done { color: #16a34a; }
+    .error-msg { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <h1>Invoice Results</h1>
+  {% if job %}
+    {% if job.status == 'done' and invoice %}
+      <div class="card">
+        <h2 class="done">&#10003; Processing Complete</h2>
+        <p><strong>Invoice #:</strong> {{ invoice.invoice_number or 'N/A' }}</p>
+        <p><strong>Vendor:</strong> {{ invoice.vendor or 'N/A' }}</p>
+        <p><strong>Date:</strong> {{ invoice.invoice_date or 'N/A' }}</p>
+        <table>
+          {% for item in line_items %}
+          <tr><td>{{ item.description }}</td><td>${{ "%.2f"|format(item.amount|float) }}</td></tr>
+          {% endfor %}
+          <tr class="total-row">
+            <td>Total</td>
+            <td>${{ "%.2f"|format(invoice.total|float) if invoice.total else 'N/A' }}</td>
+          </tr>
+        </table>
+      </div>
+    {% elif job.status == 'error' %}
+      <div class="card">
+        <p class="error-msg">Processing failed. Please try again.</p>
+      </div>
+    {% else %}
+      <div class="card">
+        <p class="status">&#8987; Processing your invoice... (status: {{ job.status }})</p>
+        <p>This page refreshes automatically every 3 seconds.</p>
+      </div>
+    {% endif %}
+  {% else %}
+    <p>Job not found.</p>
+  {% endif %}
+  <p><a href="/upload">Upload another</a> | <a href="/history">View history</a></p>
+</body>
+</html>

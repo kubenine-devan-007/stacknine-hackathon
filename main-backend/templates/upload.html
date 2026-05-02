@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>StackNine — Upload Invoice</title>
+  <style>
+    body { font-family: sans-serif; max-width: 500px; margin: 60px auto; padding: 0 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; }
+    .upload-box { border: 2px dashed #93c5fd; border-radius: 8px; padding: 40px; text-align: center; margin: 30px 0; }
+    input[type=file] { margin: 20px 0; }
+    button { padding: 12px 30px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+    a { color: #2563eb; }
+    h1 { color: #1e3a8a; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Upload Invoice</h1>
+    <span>{{ email }} — <a href="/logout">Logout</a></span>
+  </div>
+  <div class="upload-box">
+    <p>Upload a PDF invoice to extract its details automatically</p>
+    <form method="post" action="/upload" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".pdf" required>
+      <br>
+      <button type="submit">Upload &amp; Process</button>
+    </form>
+  </div>
+  <a href="/history">View past uploads</a>
+</body>
+</html>

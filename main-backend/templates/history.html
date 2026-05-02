@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>StackNine — History</title>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 60px auto; padding: 0 20px; }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    th { text-align: left; padding: 10px; background: #f1f5f9; border-bottom: 2px solid #e5e7eb; }
+    td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
+    .done { color: #16a34a; }
+    .pending { color: #d97706; }
+    .extracted { color: #d97706; }
+    .error { color: #dc2626; }
+    a { color: #2563eb; }
+    h1 { color: #1e3a8a; }
+  </style>
+</head>
+<body>
+  <h1>Upload History</h1>
+  {% if jobs %}
+  <table>
+    <tr><th>ID</th><th>File</th><th>Status</th><th>Uploaded</th><th></th></tr>
+    {% for job in jobs %}
+    <tr>
+      <td>{{ job.id }}</td>
+      <td>{{ job.file_path.split('/')[-1] }}</td>
+      <td class="{{ job.status }}">{{ job.status }}</td>
+      <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td><a href="/results/{{ job.id }}">View</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+    <p>No uploads yet.</p>
+  {% endif %}
+  <p><a href="/upload">Upload new invoice</a></p>
+</body>
+</html>
