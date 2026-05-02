@@ -1,0 +1,64 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  PREFIX: hackthon-k9-intern-devan
+  CLUSTER: hackthon-k9-intern-devan-cluster
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [main-backend, extractor, parser]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          REPO="$REGISTRY/${PREFIX}-${{ matrix.service }}-ecr"
+          docker build -t "$REPO:${{ github.sha }}" -t "$REPO:latest" "./${{ matrix.service }}"
+          docker push "$REPO:${{ github.sha }}"
+          docker push "$REPO:latest"
+
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force new ECS deployment for all three services
+        run: |
+          for svc in main-backend extractor parser; do
+            aws ecs update-service \
+              --cluster $CLUSTER \
+              --service ${PREFIX}-${svc}-svc \
+              --force-new-deployment \
+              --query 'service.deployments[0].rolloutState' \
+              --output text
+          done

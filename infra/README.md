@@ -65,6 +65,27 @@ docker run --rm -e PGPASSWORD=... -v ${PWD}/db/init.sql:/init.sql postgres:15 `
 3. Upload a PDF from `sample-invoices/`
 4. Wait for extracted fields on the results page
 
+## CI/CD (bonus)
+
+`cicd.tf` provisions a GitHub OIDC provider and a deploy role scoped to this repo. The workflow at `.github/workflows/deploy.yml` runs on every push to `main`:
+
+1. Build the three service images in parallel (matrix).
+2. Push them to ECR tagged with both `:latest` and the commit SHA.
+3. `aws ecs update-service --force-new-deployment` on all three services.
+
+One-time setup after `terraform apply`:
+
+```powershell
+terraform output github_actions_role_arn
+```
+
+Then in GitHub: **Repo → Settings → Secrets and variables → Actions → New repository secret**
+
+- Name: `AWS_ROLE_ARN`
+- Value: the ARN from the output above
+
+Push to `main` → check the **Actions** tab. No long-lived AWS keys are stored in GitHub.
+
 ## Destroy (stop NAT charges)
 
 ```powershell
