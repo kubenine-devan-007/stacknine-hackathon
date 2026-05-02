@@ -1,27 +1,286 @@
 # Hackathon — Task 1: Deploy StackNine Invoice Processor on AWS
 
 **Time allowed:** 2 hours  
-**Points:** 100
+**Points:** 100  
+**AWS Account:** You have your own dedicated account. Work independently.
 
 ---
 
-## Scenario
+## Background
 
-StackNine is a US-based fintech company. All customers are in the United States. The application currently receives around **1,000 requests per month**. You are the first infrastructure engineer on the team.
+StackNine is a US-based fintech company building an invoice processing platform. The application accepts invoice PDF uploads from users, extracts structured data from them (vendor, date, total, line items), and returns the results through a web interface.
 
-The application processes invoice PDFs. These are **sensitive financial documents**. Security is not optional — it is a baseline requirement.
+All users are currently in the United States. The application receives around **1,000 requests per month** today. The team is small but growing — new microservices will be added over time.
 
-Your job is to deploy the full application stack on AWS in a way that is secure, observable, and easy to extend as the product grows.
+You are joining as the first infrastructure engineer. Your job is to deploy this application on AWS in a way that is secure, observable, and easy to extend.
 
-Read the `README.md` in this repository before you start. It explains the application, the pipeline, and the reasoning behind the design. You are not required to follow our architecture exactly — but if you design something different, you must explain why.
+---
 
-You have your own dedicated AWS account. Work independently.
+## Application Architecture
+
+The application is made up of **three independent Python/FastAPI microservices** and a **PostgreSQL database**.
+
+```
+                         ┌──────────────────────────────────┐
+                         │         main-backend (8000)       │
+                         │  - Serves the web UI (HTML)       │
+                         │  - Accepts PDF uploads            │
+                         │  - Saves files to S3              │
+                         │  - Orchestrates the pipeline      │
+                         └──────────────┬───────────────────┘
+                                        │
+                         ┌──────────────┼────────────────┐
+                         ▼                               ▼
+              ┌──────────────────┐          ┌──────────────────┐
+              │  extractor (8001) │          │  parser (8002)   │
+              │  - Downloads PDF  │          │  - Reads raw     │
+              │    from S3        │          │    text from DB  │
+              │  - Extracts text  │          │  - Parses fields │
+              │  - Saves to DB    │          │  - Saves invoice │
+              └──────────────────┘          └──────────────────┘
+                         │                               │
+                         └───────────────┬───────────────┘
+                                         ▼
+                                    PostgreSQL
+```
+
+Each service has its own `Dockerfile` and `requirements.txt`. The database schema is in `db/init.sql`.
+
+---
+
+## Request Flow
+
+This is what happens from the moment a user uploads an invoice PDF:
+
+```
+1. User opens the app in a browser and uploads an invoice PDF
+
+2. main-backend receives the file upload
+   └─ Saves the PDF to S3
+      Key format: {job_id}/{filename}.pdf
+   └─ Creates a job record in PostgreSQL (status: pending)
+
+3. S3 fires an ObjectCreated event
+
+4. Lambda receives the event
+   └─ Reads the S3 object key → extracts job_id
+   └─ Reads the main-backend URL from SSM Parameter Store
+   └─ Calls POST /process/{job_id} on main-backend via the load balancer
+
+5. main-backend orchestrates the pipeline:
+   └─ Calls POST /extract on extractor
+      └─ extractor downloads PDF from S3
+      └─ Extracts raw text using pdfplumber
+      └─ Saves raw text to PostgreSQL
+   └─ Calls POST /parse on parser
+      └─ parser reads raw text from PostgreSQL
+      └─ Parses fields: invoice number, vendor, date, total, line items
+      └─ Saves structured data to PostgreSQL
+      └─ Updates job status to "done"
+
+6. Browser polls the results page every 3 seconds
+   └─ When status = done → displays extracted invoice data
+```
+
+---
+
+## What You Must Build
+
+### 1. Network
+
+Design a VPC for this application. Consider:
+- All users are in the US — pick your region accordingly
+- The application must tolerate the failure of a single availability zone
+- Not everything in this stack needs to be reachable from the internet — design your subnets to reflect that
+
+> **Hint:** A load balancer that faces the internet and application containers that process sensitive financial documents have different exposure requirements.
+
+---
+
+### 2. Container Registry
+
+All three services must be built as Docker images and pushed to **Amazon ECR** before ECS can run them. Your infrastructure code must include the ECR repositories.
+
+Build and push workflow (your responsibility):
+```bash
+# Authenticate, build, tag, push — for each of the three services
+```
+
+---
+
+### 3. Application Services on ECS
+
+Deploy all three services (`main-backend`, `extractor`, `parser`) on **Amazon ECS with Fargate**.
+
+**For each service, you must have:**
+
+| Requirement | Notes |
+|---|---|
+| ECS Cluster | One cluster for all three services is fine |
+| Task Definition | CPU, memory, image, environment, secrets |
+| ECS Service | Desired count, subnet placement, security group |
+| CloudWatch Log Group | Logs from every container |
+| CloudWatch Alarms | See observability section below |
+
+**Security group rules for ECS tasks:**
+- Tasks should only accept inbound traffic from the load balancer — not from anywhere else
+- Tasks must be able to reach the database, S3, SSM, ECR, and CloudWatch
+
+**For ECS secrets:** All sensitive values (DB password, DB host, etc.) must be sourced from SSM Parameter Store as container secrets — not as plaintext environment variables.
+
+---
+
+### 4. Load Balancer (ALB)
+
+The application is accessed through a browser. The entry point is an **Application Load Balancer**.
+
+- The ALB must be the **only** publicly accessible component for HTTP traffic
+- Security group on the ALB: restrict inbound to only what is necessary
+- The ALB routes traffic to the ECS services — configure your target groups and health checks
+- `main-backend` has a `/health` endpoint. So do `extractor` and `parser`.
+
+> **Hint:** Think about how the three services communicate with each other. Does every service need to be directly exposed through the ALB? Or is there another way?
+
+---
+
+### 5. Database (PostgreSQL 15)
+
+The application requires PostgreSQL 15. **Where and how you run it is your decision.**
+
+Options include EC2, Fargate, or a managed service. There are tradeoffs to each. Whatever you choose:
+- The database must **not** be reachable from the internet
+- The schema in `db/init.sql` must be applied before the application handles traffic
+- The database password must be stored in SSM Parameter Store as a `SecureString`
+
+Be ready to explain your database decision during the walkthrough.
+
+---
+
+### 6. S3 and Lambda
+
+The invoice upload pipeline depends on:
+
+**S3 uploads bucket:**
+- Private — no public access
+- Encrypted at rest — choose your encryption approach and be ready to justify it
+- Configured to send `ObjectCreated` events to Lambda
+
+**Lambda function:**
+- Source code is in `lambda/handler.py`
+- Reads the main-backend URL from SSM parameter `/stacknine/main-backend-url`
+- Calls `POST /process/{job_id}` on the main-backend via the ALB
+- Needs appropriate IAM permissions — and only those permissions
+
+> **Hint:** What happens if Lambda fires and the backend is not yet ready to respond? Is one attempt sufficient for a financial document processing pipeline?
+
+---
+
+### 7. Security and IAM
+
+**S3:**
+- Block all public access at the bucket level
+- Encrypt all objects — `aws:kms` or `AES256`, justify your choice
+- The bucket policy should only allow access from the services that need it
+
+**IAM — task roles:**
+Each ECS service must have its own task role. Before granting any permission, confirm the service actually needs it.
+
+Ask yourself:
+- Does `parser` need to read or write to S3?
+- Does `extractor` need to write invoice records to the database?
+- Does `main-backend` need to read from S3, or only write to it?
+- Does Lambda need database access?
+
+**IAM — task execution role:**
+The execution role (used by ECS to pull images and inject secrets) needs access to ECR and SSM. Scope it tightly.
+
+**General rule:** No `*` in `Resource` fields. Scope every policy to specific ARNs.
+
+---
+
+### 8. SSM Parameter Store
+
+All application runtime configuration must live in SSM. The following parameters are required:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `/stacknine/db-host` | String | Database hostname or NLB DNS |
+| `/stacknine/db-name` | String | Database name |
+| `/stacknine/db-user` | String | Database user |
+| `/stacknine/db-password` | SecureString | Database password (KMS encrypted) |
+| `/stacknine/main-backend-url` | String | ALB DNS name — used by Lambda |
+
+All parameter names must follow the hackathon naming convention.
+
+---
+
+### 9. Observability
+
+#### Logging
+Every ECS service and Lambda must send logs to CloudWatch Log Groups. Set a retention period — logs should not live forever.
+
+#### Auto Scaling
+Configure **auto scaling for `main-backend`** at minimum. Use CPU utilisation as the scaling metric.
+
+> The other two services are lower priority, but if you have time, apply the same pattern.
+
+#### Alarms
+Think about what breaks when a service goes down. At minimum, you should be alerted when:
+- A service has **no healthy tasks** behind the load balancer
+- A service is **consuming too much CPU or memory**
+- **Lambda is throwing errors**
+- The **ALB is returning 5xx responses**
+
+> **Hint:** There is a difference between a task that is unhealthy and a task that does not exist at all. Both are problems. Both need different alarms.
+
+#### Designing for tomorrow
+This is important. Today you have three services. Next month there may be four. The month after, five.
+
+**The expectation:** adding a fourth ECS service to this stack should take minutes, not hours. Your Terraform (or CDK/CloudFormation) should be structured so that log groups, alarms, and auto scaling are not written from scratch each time.
+
+> **Hint:** What do all three services have in common? If you find yourself writing the same configuration block three times, there is a better way.
+
+---
+
+### 10. Infrastructure as Code
+
+Your deployment must be fully reproducible. Running your code on a fresh AWS account must produce a working stack.
+
+- Tool of your choice: Terraform, AWS CDK, CloudFormation, or a combination
+- The code must be clean, readable, and organised
+- A colleague should be able to understand your structure without asking you
+
+There is no requirement to use any specific tool. **Justify your choice.**
+
+---
+
+## Testing Your Deployment
+
+Sample invoice PDFs are provided in the `sample-invoices/` folder of this repository:
+
+```
+sample-invoices/
+├── invoice-acme-corp.pdf
+├── invoice-aws-consulting.pdf
+├── invoice-cloudhost.pdf
+├── invoice-design-studio.pdf
+├── invoice-saas-tools.pdf
+└── invoice-techpro.pdf
+```
+
+Once your stack is deployed:
+1. Open the ALB URL in a browser
+2. Log in with any email address (e.g. `test@stacknine.com`) and any password
+3. Upload one of the sample invoices
+4. Wait for the results page to show the extracted invoice data
+
+If the results page shows invoice number, vendor, date, total, and line items — your pipeline is working end-to-end.
 
 ---
 
 ## Naming Convention
 
-Every AWS resource you create must follow this pattern:
+Every AWS resource must follow this naming pattern:
 
 ```
 hackthon-k9-intern-<your-name>-<resource>
@@ -30,96 +289,38 @@ hackthon-k9-intern-<your-name>-<resource>
 **Examples:**
 ```
 hackthon-k9-intern-alice-vpc
-hackthon-k9-intern-alice-main-backend-cluster
+hackthon-k9-intern-alice-main-backend-service
 hackthon-k9-intern-alice-uploads-bucket
-hackthon-k9-intern-alice-db-password          ← SSM parameter
+hackthon-k9-intern-alice-db-password          ← SSM parameter name
+hackthon-k9-intern-alice-main-backend-ecr     ← ECR repository
 ```
 
 Resources without the correct prefix will not be evaluated.
 
 ---
 
-## What You Must Deliver
-
-A fully working deployment where:
-
-1. A user opens the app in a browser, uploads an invoice PDF, and sees the extracted invoice data on screen within ~30 seconds.
-2. The full pipeline runs: upload → S3 event → Lambda → extractor → parser → results page.
-3. All three application services are running as containers on ECS.
-4. Docker images are pushed to **Amazon ECR** and pulled by ECS at deploy time.
-5. The database is running and the schema is applied — the application requires PostgreSQL 15. Where and how you run it is your design decision. Be ready to justify it.
-6. All infrastructure is deployed as code. Running your code on a clean AWS account must produce a working stack. The tool is your choice — Terraform, CDK, CloudFormation, or any combination.
-7. Logs and alarms are in place for all services.
-
----
-
-## Non-Negotiable Requirements
-
-### Data Security
-- Invoice PDFs stored in S3 must be **encrypted at rest**. Choose your encryption approach and justify it.
-- The S3 bucket must not be publicly accessible. No exceptions.
-- All application configuration and secrets must be sourced from **AWS SSM Parameter Store** at runtime. Nothing sensitive should appear as a plaintext value in a task definition, Lambda environment, or source code.
-
-### IAM
-- Every role must follow **least privilege**. Before granting a permission, confirm the service actually needs it.
-- Ask yourself: does the parser touch S3? Does the extractor write invoice records? Does Lambda need database access? Grant only what is required.
-- Each ECS service must have its own task role. Do not share roles between services.
-
-### Network
-- Think carefully about what should and should not be reachable from the internet. Load balancers and application services have different exposure requirements.
-- Security groups must be as restrictive as possible. Open only the ports each resource actually uses.
-
-### Infrastructure as Code
-- Your code must be reproducible. A colleague should be able to run it on a fresh AWS account and get a working stack.
-- **Design for tomorrow:** if a fourth service is added to this application next week, how quickly can you wire it up with the same logging, alarms, and scaling configuration as the existing three? The answer should be: very quickly. Let your code structure reflect that.
-
-### Observability
-- Every service must ship logs to CloudWatch with a sensible retention period.
-- Auto scaling must be configured for at least the `main-backend` service.
-- Think about this: it is 2am and the application is down. What are the first signals you would look for? Those are the alarms you need. Think beyond CPU — consider what happens at the load balancer, at the task level, and at the Lambda level.
-
----
-
-## Hints
-
-> These are observations, not instructions. Two or three lines each. How you act on them is your decision.
-
-**Region:** All users are in the US. A failure in a single data centre should not take the application down.
-
-**Network design:** Not every component in this stack needs the same level of internet exposure. What does, and what doesn't?
-
-**Encryption:** There is more than one way to encrypt S3 objects. They are not equivalent in terms of key control and auditability.
-
-**IAM depth:** The three services do different things. Their IAM roles should be meaningfully different — not three copies of the same broad policy.
-
-**ECR:** Before your ECS services can run, the images must exist somewhere ECS can pull from. ECR is the natural home. Your infrastructure code should include the repositories.
-
-**Database:** The application needs PostgreSQL 15 with the schema from `db/init.sql`. Where you run it, how you size it, and how the schema gets applied at deploy time are all design decisions. Each has tradeoffs.
-
-**Terraform reusability:** Look at what all three ECS services have in common — cluster, task definition, service, target group, log group, alarms, scaling. If you find yourself writing the same block three times, you are doing it the hard way.
-
-**Lambda reliability:** S3 fires the event once. If the backend is not yet ready, what happens to that upload?
-
-**Alarms — a starting point to think from:** An unhealthy target behind a load balancer and a service with zero running tasks are two different failure modes that need two different signals.
-
----
-
 ## Scoring
 
-| Area | Marks | What We Are Looking For |
-|---|---|---|
-| **Application works end-to-end** | 25 | Upload a PDF, see extracted results. Full pipeline completes. |
-| **Security** | 25 | Encryption, IAM least privilege, network design, SSM usage |
-| **Infrastructure as Code** | 20 | Reproducible, clean, structured for future extension |
-| **Observability** | 15 | Logs, alarms that matter, auto scaling |
-| **Design decisions** | 15 | Can you explain every choice you made, and why? |
+| Area | What We Look For |
+|---|---|
+| **End-to-end pipeline works** | Upload a sample invoice, see extracted results on screen |
+| **Security** | Encryption, IAM least privilege, network design, SSM usage |
+| **Infrastructure as Code** | Reproducible, structured for reuse, adding a 4th service is fast |
+| **Observability** | Logs, meaningful alarms, auto scaling on main-backend |
+| **Design decisions** | Can you clearly explain every choice you made? |
+
+### Bonus — CI/CD Pipeline
+
+If you implement a **GitHub Actions workflow** that automates the full deployment end-to-end — build Docker images, push to ECR, and deploy to ECS — that will be recognised as additional achievement during the evaluation.
+
+This is not required. But if you get the core infrastructure working with time to spare, this is the next level.
 
 ---
 
 ## Submission
 
-1. Push your infrastructure code to a GitHub repository.
-2. Provide the repository link and the public URL of the running application to the evaluator.
-3. Be ready to walk through your architecture — diagram, decisions, tradeoffs.
+1. Push your infrastructure code to a GitHub repository
+2. Share the repository URL and the running application URL with the evaluator
+3. Be ready to walk through your entire architecture — diagram, decisions, tradeoffs
 
-**There is no single correct architecture.** A well-justified simple design scores higher than a complex one you cannot explain.
+**A well-justified simple design scores higher than a complex design you cannot explain.**
