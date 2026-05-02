@@ -9,3 +9,12 @@ build/
 .env
 uploads/*.pdf
 lambda.zip
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+infra/lambda_s3_trigger.zip
+override.tf
+_override.tf
